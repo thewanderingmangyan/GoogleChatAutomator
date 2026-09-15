@@ -39,8 +39,23 @@ jobs:
     - name: Create One-Click Launch Script
       shell: powershell
       run: |
-        $batContent = "@echo off`r`ntitle Google Chat Work Order Automator`r`necho Starting Google Chat Dispatcher...`r`necho Make sure your export file is in your Downloads folder.`r`necho.`r`n""%~dp0GoogleChatAutomator.exe""`r`npause"
-        Set-Content -Path "dist\GoogleChatAutomator\RUN_AUTOMATION.bat" -Value $batContent
+        @'
+        @echo off
+        title Google Chat Work Order Automator
+        echo ===================================================
+        echo  Starting Google Chat Dispatcher...
+        echo ===================================================
+        echo.
+        
+        "%~dp0GoogleChatAutomator.exe"
+        
+        echo.
+        echo ===================================================
+        echo  Execution finished or encountered an error.
+        echo  Check the output above for details.
+        echo ===================================================
+        pause
+        '@ | Out-File -FilePath "dist\GoogleChatAutomator\RUN_AUTOMATION.bat" -Encoding ascii
 
     - name: Compress Bundle into ZIP Archive
       shell: powershell
