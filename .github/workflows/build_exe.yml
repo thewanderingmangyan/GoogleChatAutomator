@@ -1,0 +1,54 @@
+name: Build Windows Executable
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout Repository Code
+      uses: actions/checkout@v4
+
+    - name: Set up Python Environment
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install Python Dependencies & Playwright Browsers
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        playwright install chromium
+
+    - name: Compile Executable with PyInstaller
+      run: |
+        pyinstaller --noconfirm --onedir --console --name "GoogleChatAutomator" browser_dm_automation.py
+
+    - name: Bundle Playwright Chromium Binaries into Output Directory
+      shell: powershell
+      run: |
+        $pwPath = "$env:LOCALAPPDATA\ms-playwright"
+        $targetPath = "dist\GoogleChatAutomator\playwright\driver\package\.local-browsers"
+        New-Item -ItemType Directory -Force -Path $targetPath
+        Copy-Item -Path "$pwPath\*" -Destination $targetPath -Recurse -Force
+
+    - name: Create One-Click Launch Script
+      shell: powershell
+      run: |
+        $batContent = "@echo off`r`ntitle Google Chat Work Order Automator`r`necho Starting Google Chat Dispatcher...`r`necho Make sure your export file is in your Downloads folder.`r`necho.`r`n""%~dp0GoogleChatAutomator.exe""`r`npause"
+        Set-Content -Path "dist\GoogleChatAutomator\RUN_AUTOMATION.bat" -Value $batContent
+
+    - name: Compress Bundle into ZIP Archive
+      shell: powershell
+      run: |
+        Compress-Archive -Path "dist\GoogleChatAutomator\*" -DestinationPath "GoogleChatAutomator_Windows.zip"
+
+    - name: Upload Windows Executable Artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: GoogleChatAutomator_Windows
+        path: GoogleChatAutomator_Windows.zip
