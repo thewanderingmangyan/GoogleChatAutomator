@@ -411,13 +411,33 @@ async def run_chat_automation():
             "https://chat.google.com/app/home", wait_until="domcontentloaded"
         )
 
-        if "accounts.google.com" in page.url:
-            print("🔑 Login required inside browser window...")
-            await page.wait_for_url(
-                lambda url: "chat.google.com" in url or "mail.google.com" in url,
-                timeout=180000,
+        # -------------------------------------------------------------------
+        # ROBUST AUTHENTICATION & SESSION CHECK
+        # -------------------------------------------------------------------
+        await asyncio.sleep(3)
+
+        if "accounts.google.com" in page.url or not (
+            await page.query_selector('span:has-text("New chat")')
+        ):
+            print("\n" + "=" * 60)
+            print(
+                "🔑 ACTION REQUIRED: Please log in to your Google Workspace account inside the opened browser window."
             )
-            print("✅ Login detected!")
+            print(
+                "⏳ The automation will automatically resume once Google Chat loads..."
+            )
+            print("=" * 60 + "\n")
+
+            try:
+                await page.wait_for_selector(
+                    'span:has-text("New chat"), button:has-text("New chat")',
+                    timeout=300000,  # 5-minute timeout window for login/2FA
+                )
+                print("✅ Login successful! Starting message dispatch...\n")
+            except Exception:
+                raise TimeoutError(
+                    "❌ Login timeout exceeded (5 minutes). Please run the application again."
+                )
 
         await kill_overlays_and_popups(page)
 
