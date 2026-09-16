@@ -1,4 +1,4 @@
-name: Build Windows Executable
+name: Build Standalone Windows Executable
 
 on:
   push:
@@ -24,46 +24,20 @@ jobs:
         pip install -r requirements.txt
         playwright install chromium
 
-    - name: Compile Executable with PyInstaller
-      run: |
-        pyinstaller --noconfirm --onedir --console --name "GoogleChatAutomator" browser_dm_automation.py
-
-    - name: Bundle Playwright Chromium Binaries into Output Directory
+    - name: Compile Standalone Executable with PyInstaller
       shell: powershell
       run: |
+        # Locate local Playwright browser installation
         $pwPath = "$env:LOCALAPPDATA\ms-playwright"
-        $targetPath = "dist\GoogleChatAutomator\playwright\driver\package\.local-browsers"
-        New-Item -ItemType Directory -Force -Path $targetPath
-        Copy-Item -Path "$pwPath\*" -Destination $targetPath -Recurse -Force
-
-    - name: Create One-Click Launch Script
-      shell: powershell
-      run: |
-        @'
-        @echo off
-        title Google Chat Work Order Automator
-        echo ===================================================
-        echo  Starting Google Chat Dispatcher...
-        echo ===================================================
-        echo.
         
-        "%~dp0GoogleChatAutomator.exe"
-        
-        echo.
-        echo ===================================================
-        echo  Execution finished or encountered an error.
-        echo  Check the output above for details.
-        echo ===================================================
-        pause
-        '@ | Out-File -FilePath "dist\GoogleChatAutomator\RUN_AUTOMATION.bat" -Encoding ascii
+        # Build single-file executable embedding Playwright binaries into temp runtime
+        pyinstaller --noconfirm --onefile --console `
+          --add-data "$pwPath;playwright/driver/package/.local-browsers" `
+          --name "GoogleChatAutomator" `
+          browser_dm_automation.py
 
-    - name: Compress Bundle into ZIP Archive
-      shell: powershell
-      run: |
-        Compress-Archive -Path "dist\GoogleChatAutomator\*" -DestinationPath "GoogleChatAutomator_Windows.zip"
-
-    - name: Upload Windows Executable Artifact
+    - name: Upload Standalone Executable Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: GoogleChatAutomator_Windows
-        path: GoogleChatAutomator_Windows.zip
+        name: GoogleChatAutomator_SingleFile
+        path: dist/GoogleChatAutomator.exe
