@@ -23,6 +23,7 @@ if getattr(sys, "frozen", False):
 DOWNLOADS_DIR = os.path.expanduser("~/Downloads")
 USER_DATA_DIR = os.path.expanduser("~/Desktop/google_chat_session")
 SHEET_VIEW_URL = "https://docs.google.com/spreadsheets/d/1f4oi6yH__GFo6MMqIqTKoWPvKXXo9Gck6Mjo2Yo5nAE/edit?usp=sharing"
+MAX_CHAT_LENGTH = 3500  # Safe safety margin under Google Chat's 4096 character limit
 
 
 def get_latest_downloaded_csv():
@@ -157,13 +158,9 @@ def load_and_group_data(file_path):
     return grouped_data
 
 
-def build_consolidated_message(fee_name, work_orders):
-    """Formats work orders into a stylized Google Chat message categorized by Creation Ageing."""
+def build_consolidated_messages(fee_name, work_orders):
+    """Formats work orders into stylized Google Chat message(s), breaking into batches if character limit is exceeded."""
     total_wos = len(work_orders)
-
-    above_30 = []
-    days_16_to_30 = []
-    days_0_to_15 = []
 
     skillsets_count = {}
     delays_count = {}
@@ -171,45 +168,8 @@ def build_consolidated_message(fee_name, work_orders):
     for wo in work_orders:
         skill = wo["skillset"]
         delay = wo["delay_code"]
-        age = wo["ageing"]
-
         skillsets_count[skill] = skillsets_count.get(skill, 0) + 1
         delays_count[delay] = delays_count.get(delay, 0) + 1
-
-        if age > 30:
-            above_30.append(wo)
-        elif 16 <= age <= 30:
-            days_16_to_30.append(wo)
-        else:
-            days_0_to_15.append(wo)
-
-    wo_sections = []
-
-    if above_30:
-        lines = ["🔴 *Critical WOs for dispatch — Above 30 days*"]
-        for idx, wo in enumerate(above_30, start=1):
-            lines.append(
-                f"   {idx}. *{wo['wo_number']}* • _{wo['skillset']}_ • *{wo['delay_code']}*"
-            )
-        wo_sections.append("\n".join(lines))
-
-    if days_16_to_30:
-        lines = ["🟠 *16 - 30 days*"]
-        for idx, wo in enumerate(days_16_to_30, start=1):
-            lines.append(
-                f"   {idx}. *{wo['wo_number']}* • _{wo['skillset']}_ • *{wo['delay_code']}*"
-            )
-        wo_sections.append("\n".join(lines))
-
-    if days_0_to_15:
-        lines = ["🟢 *0 - 15 days*"]
-        for idx, wo in enumerate(days_0_to_15, start=1):
-            lines.append(
-                f"   {idx}. *{wo['wo_number']}* • _{wo['skillset']}_ • *{wo['delay_code']}*"
-            )
-        wo_sections.append("\n".join(lines))
-
-    wo_list_body = "\n\n".join(wo_sections)
 
     skillset_summary_str = ", ".join(
         [f"{k}: *{v}*" for k, v in skillsets_count.items()]
@@ -218,21 +178,70 @@ def build_consolidated_message(fee_name, work_orders):
         [f"{k}: *{v}*" for k, v in delays_count.items()]
     )
 
-    message_text = (
-        f"🚨 *DELAYED WORK ORDER ALERT (CRESPD and CWET)*\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"Hi *{fee_name}*,\n"
-        f"You have *{total_wos}* assigned Work Order(s) requiring attention:\n\n"
-        f"{wo_list_body}\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📊 *ACTIVE SUMMARY*\n"
-        f"  • Total Assigned: *{total_wos} Work Order(s)*\n"
-        f"  • Skillsets: {skillset_summary_str}\n"
-        f"  • Delay Codes: {delay_summary_str}\n\n"
-        f"🔗 *Google Sheet Link:* {SHEET_VIEW_URL}\n\n"
-        f"⚠️ *PLEASE ACKNOWLEDGE THIS MESSAGE*"
-    )
-    return message_text
+    # Chunk work orders into batches if list is large
+    # Estimate ~100 characters per WO entry line
+    batch_size = 25  # Safe number of WOs per chat bubble
+    wo_batches = [
+        work_orders[i : i + batch_size]
+        for i in range(0, total_wos, batch_size)
+    ]
+    total_parts = len(wo_batches)
+
+    messages = []
+
+    for part_idx, batch in enumerate(wo_batches, start=1):
+        above_30 = [w for w in batch if w["ageing"] > 30]
+        days_16_to_30 = [w for w in batch if 16 <= w["ageing"] <= 30]
+        days_0_to_15 = [w for w in batch if w["ageing"] < 16]
+
+        wo_sections = []
+
+        if above_30:
+            lines = ["🔴 *Critical WOs — Above 30 days*"]
+            for idx, wo in enumerate(above_30, start=1):
+                lines.append(
+                    f"   {idx}. *{wo['wo_number']}* • _{wo['skillset']}_ • *{wo['delay_code']}*"
+                )
+            wo_sections.append("\n".join(lines))
+
+        if days_16_to_30:
+            lines = ["🟠 *16 - 30 days*"]
+            for idx, wo in enumerate(days_16_to_30, start=1):
+                lines.append(
+                    f"   {idx}. *{wo['wo_number']}* • _{wo['skillset']}_ • *{wo['delay_code']}*"
+                )
+            wo_sections.append("\n".join(lines))
+
+        if days_0_to_15:
+            lines = ["🟢 *0 - 15 days*"]
+            for idx, wo in enumerate(days_0_to_15, start=1):
+                lines.append(
+                    f"   {idx}. *{wo['wo_number']}* • _{wo['skillset']}_ • *{wo['delay_code']}*"
+                )
+            wo_sections.append("\n".join(lines))
+
+        wo_list_body = "\n\n".join(wo_sections)
+        part_tag = (
+            f" *(Part {part_idx} of {total_parts})*" if total_parts > 1 else ""
+        )
+
+        msg = (
+            f"🚨 *DELAYED WORK ORDER ALERT (CRESPD and CWET)*{part_tag}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Hi *{fee_name}*,\n"
+            f"You have *{total_wos}* assigned Work Order(s) requiring attention:\n\n"
+            f"{wo_list_body}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📊 *ACTIVE SUMMARY*\n"
+            f"  • Total Assigned: *{total_wos} Work Order(s)*\n"
+            f"  • Skillsets: {skillset_summary_str}\n"
+            f"  • Delay Codes: {delay_summary_str}\n\n"
+            f"🔗 *Google Sheet Link:* {SHEET_VIEW_URL}\n\n"
+            f"⚠️ *PLEASE ACKNOWLEDGE THIS MESSAGE*"
+        )
+        messages.append(msg)
+
+    return messages
 
 
 async def kill_overlays_and_popups(page):
@@ -411,11 +420,8 @@ async def run_chat_automation():
             "https://chat.google.com/app/home", wait_until="domcontentloaded"
         )
 
-        # -------------------------------------------------------------------
-        # ROBUST AUTHENTICATION & SESSION CHECK
-        # -------------------------------------------------------------------
+        # Authentication Check
         await asyncio.sleep(3)
-
         if "accounts.google.com" in page.url or not (
             await page.query_selector('span:has-text("New chat")')
         ):
@@ -431,7 +437,7 @@ async def run_chat_automation():
             try:
                 await page.wait_for_selector(
                     'span:has-text("New chat"), button:has-text("New chat")',
-                    timeout=300000,  # 5-minute timeout window for login/2FA
+                    timeout=300000,
                 )
                 print("✅ Login successful! Starting message dispatch...\n")
             except Exception:
@@ -441,7 +447,8 @@ async def run_chat_automation():
 
         await kill_overlays_and_popups(page)
 
-        dispatched_recipients = 0
+        # Results Tracker
+        dispatch_report = []
 
         for fee_email, data in grouped_data.items():
             if page.is_closed():
@@ -450,26 +457,66 @@ async def run_chat_automation():
 
             fee_name = data["name"]
             work_orders = data["work_orders"]
-            message_text = build_consolidated_message(fee_name, work_orders)
+            message_batches = build_consolidated_messages(fee_name, work_orders)
 
-            print(f"🚀 Dispatching DM to {fee_email} ({len(work_orders)} WOs)...")
+            print(
+                f"🚀 Processing DM to {fee_email} ({len(work_orders)} WOs in {len(message_batches)} batch[es])..."
+            )
+
+            user_success = True
+            batches_sent = 0
 
             try:
                 await kill_overlays_and_popups(page)
                 await click_new_chat(page)
                 await select_user_suggestion_and_open_dm(page, fee_email)
-                await send_chat_message(page, message_text)
 
-                dispatched_recipients += 1
-                print(f"✅ Delivered DM to {fee_email}")
+                for msg in message_batches:
+                    await send_chat_message(page, msg)
+                    batches_sent += 1
+                    await asyncio.sleep(1)
+
+                print(f"✅ Delivered all DM batches to {fee_email}")
 
             except Exception as e:
-                print(f"❌ Failed to dispatch DM to {fee_email}: {str(e)}")
+                user_success = False
+                print(f"❌ Unsuccessful dispatch to {fee_email}: {str(e)}")
+
+            dispatch_report.append(
+                {
+                    "recipient": fee_email,
+                    "name": fee_name,
+                    "status": "Delivered" if user_success else "Unsuccessful",
+                    "batches": batches_sent,
+                    "total_wos": len(work_orders),
+                }
+            )
 
             await asyncio.sleep(1.5)
 
+        # Generate Execution Summary Table
+        print("\n" + "=" * 60)
+        print("📊 EXECUTION DISPATCH SUMMARY REPORT")
+        print("=" * 60)
+        print(f"{'Recipient Email':<35} | {'Status':<15} | {'WOs':<5} | {'DMs'}")
+        print("-" * 60)
+
+        successful_count = 0
+        for item in dispatch_report:
+            status_str = (
+                "✅ Delivered"
+                if item["status"] == "Delivered"
+                else "❌ Unsuccessful"
+            )
+            if item["status"] == "Delivered":
+                successful_count += 1
+            print(
+                f"{item['recipient']:<35} | {status_str:<15} | {item['total_wos']:<5} | {item['batches']}"
+            )
+
+        print("=" * 60)
         print(
-            f"\n🎉 All done! Delivered {dispatched_recipients} of {total_recipients} recipient DM(s)."
+            f"🎉 Completed: {successful_count} of {len(dispatch_report)} recipient(s) successfully processed.\n"
         )
         await browser.close()
 
