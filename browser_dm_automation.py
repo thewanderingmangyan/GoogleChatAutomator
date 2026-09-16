@@ -1,8 +1,21 @@
 import asyncio
 import glob
 import os
+import sys
+import traceback
 import pandas as pd
 from playwright.async_api import async_playwright
+
+# ---------------------------------------------------------------------------
+# PYINSTALLER SINGLE-FILE PATH SETUP
+# ---------------------------------------------------------------------------
+if getattr(sys, "frozen", False):
+    base_dir = getattr(
+        sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__))
+    )
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.join(
+        base_dir, "playwright", "driver", "package", ".local-browsers"
+    )
 
 # ---------------------------------------------------------------------------
 # CONFIGURATION
@@ -279,7 +292,9 @@ async def select_user_suggestion_and_open_dm(page, fee_email):
     search_input = None
     for sel in search_selectors:
         try:
-            search_input = await page.wait_for_selector(sel, state="visible", timeout=3000)
+            search_input = await page.wait_for_selector(
+                sel, state="visible", timeout=3000
+            )
             if search_input:
                 break
         except Exception:
@@ -302,7 +317,9 @@ async def select_user_suggestion_and_open_dm(page, fee_email):
     suggestion_clicked = False
     for sel in suggestion_selectors:
         try:
-            option = await page.wait_for_selector(sel, state="visible", timeout=3000)
+            option = await page.wait_for_selector(
+                sel, state="visible", timeout=3000
+            )
             if option:
                 await option.click()
                 suggestion_clicked = True
@@ -330,7 +347,9 @@ async def send_chat_message(page, message_text):
     msg_box = None
     for selector in editor_selectors:
         try:
-            msg_box = await page.wait_for_selector(selector, state="visible", timeout=6000)
+            msg_box = await page.wait_for_selector(
+                selector, state="visible", timeout=6000
+            )
             if msg_box:
                 break
         except Exception:
@@ -356,27 +375,22 @@ async def send_chat_message(page, message_text):
 
 
 async def run_chat_automation():
-    try:
-        file_path = get_latest_downloaded_csv()
-        grouped_data = load_and_group_data(file_path)
+    file_path = get_latest_downloaded_csv()
+    grouped_data = load_and_group_data(file_path)
 
-        total_recipients = len(grouped_data)
-        total_wos = sum(
-            len(info["work_orders"]) for info in grouped_data.values()
-        )
-        print(
-            f"📊 Aggregated {total_wos} pending Work Orders across {total_recipients} recipient(s)."
-        )
+    total_recipients = len(grouped_data)
+    total_wos = sum(
+        len(info["work_orders"]) for info in grouped_data.values()
+    )
+    print(
+        f"📊 Aggregated {total_wos} pending Work Orders across {total_recipients} recipient(s)."
+    )
 
-        if total_recipients == 0:
-            print("ℹ️ No pending work orders to send.")
-            return
-
-    except Exception as e:
-        print(f"❌ Error loading file: {str(e)}")
+    if total_recipients == 0:
+        print("ℹ️ No pending work orders to send.")
         return
 
-    print("🌐 Launching background browser...")
+    print("🌐 Launching browser context...")
     async with async_playwright() as p:
         browser = await p.chromium.launch_persistent_context(
             user_data_dir=USER_DATA_DIR,
@@ -434,9 +448,18 @@ async def run_chat_automation():
 
             await asyncio.sleep(1.5)
 
-        print(f"\n🎉 All done! Delivered {dispatched_recipients} of {total_recipients} recipient DM(s).")
+        print(
+            f"\n🎉 All done! Delivered {dispatched_recipients} of {total_recipients} recipient DM(s)."
+        )
         await browser.close()
 
 
 if __name__ == "__main__":
-    asyncio.run(run_chat_automation())
+    try:
+        asyncio.run(run_chat_automation())
+    except Exception as e:
+        print(f"\n❌ CRITICAL SCRIPT ERROR: {str(e)}")
+        traceback.print_exc()
+    finally:
+        print("\n" + "=" * 50)
+        input("Press ENTER to exit...")
