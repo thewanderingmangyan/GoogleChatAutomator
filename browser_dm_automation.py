@@ -23,7 +23,6 @@ if getattr(sys, "frozen", False):
 DOWNLOADS_DIR = os.path.expanduser("~/Downloads")
 USER_DATA_DIR = os.path.expanduser("~/Desktop/google_chat_session")
 SHEET_VIEW_URL = "https://docs.google.com/spreadsheets/d/1f4oi6yH__GFo6MMqIqTKoWPvKXXo9Gck6Mjo2Yo5nAE/edit?usp=sharing"
-MAX_CHAT_LENGTH = 3500  # Safe safety margin under Google Chat's 4096 character limit
 
 
 def get_latest_downloaded_csv():
@@ -76,16 +75,35 @@ def get_latest_downloaded_csv():
 
 
 def parse_ageing(val):
-    """Safely parses Creation ageing value to an integer."""
+    """Safely parses Ageing / Creation ageing values to an integer."""
+    if pd.isna(val) or val is None:
+        return 0
+
+    s_val = str(val).strip().lower()
+
+    # If it's already a direct integer string like '139', '19', '2'
+    if s_val.isdigit():
+        return int(s_val)
+
+    # Handle explicit range strings if numeric column isn't populated
+    if "above 30" in s_val or "> 30" in s_val or ">30" in s_val:
+        return 31
+    if "16-30" in s_val or "16 - 30" in s_val:
+        return 20
+    if "8-15" in s_val or "8 - 15" in s_val:
+        return 10
+    if "4-7" in s_val or "4 - 7" in s_val:
+        return 5
+
+    # Fallback to float conversion if decimals exist
     try:
-        clean_val = "".join(c for c in str(val) if c.isdigit())
-        return int(clean_val) if clean_val else 0
+        return int(float(s_val))
     except Exception:
         return 0
 
 
 def load_and_group_data(file_path):
-    """Reads CSV/Excel data, filters out Completed/Cancelled WOs (Column E), targets Column Q for ageing, and groups per FEE."""
+    """Reads CSV/Excel data, filters out Completed/Cancelled WOs, targets 'Ageing' column, and groups per FEE."""
     if file_path.endswith((".xlsx", ".xls")):
         df = pd.read_excel(file_path)
     else:
@@ -93,7 +111,11 @@ def load_and_group_data(file_path):
 
     df.columns = [str(col).strip() for col in df.columns]
 
+    # Target specific columns reliably
     column_e_name = df.columns[4] if len(df.columns) > 4 else None
+    
+    # Priority for Ageing: Column P (Index 15 - numeric 'Ageing') -> Column Q (Index 16 - 'Creation ageing')
+    column_p_name = df.columns[15] if len(df.columns) > 15 else None
     column_q_name = df.columns[16] if len(df.columns) > 16 else None
 
     records = df.to_dict(orient="records")
@@ -108,6 +130,7 @@ def load_and_group_data(file_path):
         status2_val = (
             str(row.get("status2", ""))
             or str(row.get("Status2", ""))
+            or str(row.get("Status 2", ""))
             or str(row.get("status 2", ""))
             or (str(row.get(column_e_name, "")) if column_e_name else "")
         ).strip().lower()
@@ -123,12 +146,14 @@ def load_and_group_data(file_path):
         if not delay_code or delay_code.lower() in ["nan", "none", ""]:
             delay_code = "None/Pending"
 
+        # Read numeric 'Ageing' column first, fallback to 'Creation ageing'
         ageing_val = (
-            row.get("Creation ageing")
+            row.get("Ageing")
+            or row.get("ageing")
+            or (row.get(column_p_name) if column_p_name else None)
+            or row.get("Creation ageing")
             or row.get("Creation Ageing")
-            or row.get("creation_ageing")
             or (row.get(column_q_name) if column_q_name else 0)
-            or 0
         )
         ageing = parse_ageing(ageing_val)
 
@@ -178,8 +203,6 @@ def build_consolidated_messages(fee_name, work_orders):
         [f"{k}: *{v}*" for k, v in delays_count.items()]
     )
 
-    # Chunk work orders into batches if list is large
-    # Estimate ~100 characters per WO entry line
     batch_size = 25  # Safe number of WOs per chat bubble
     wo_batches = [
         work_orders[i : i + batch_size]
@@ -192,12 +215,12 @@ def build_consolidated_messages(fee_name, work_orders):
     for part_idx, batch in enumerate(wo_batches, start=1):
         above_30 = [w for w in batch if w["ageing"] > 30]
         days_16_to_30 = [w for w in batch if 16 <= w["ageing"] <= 30]
-        days_0_to_15 = [w for w in batch if w["ageing"] < 16]
+        days_0_to_15 = [w for w in batch if w["ageing"] <= 15]
 
         wo_sections = []
 
         if above_30:
-            lines = ["🔴 *Critical WOs — Above 30 days*"]
+            lines = [f"🔴 *Critical WOs for dispatch — Above 30 days ({len(above_30)} ORDERS)*"]
             for idx, wo in enumerate(above_30, start=1):
                 lines.append(
                     f"   {idx}. *{wo['wo_number']}* • _{wo['skillset']}_ • *{wo['delay_code']}*"
@@ -205,7 +228,7 @@ def build_consolidated_messages(fee_name, work_orders):
             wo_sections.append("\n".join(lines))
 
         if days_16_to_30:
-            lines = ["🟠 *16 - 30 days*"]
+            lines = [f"🟠 *16 - 30 days ({len(days_16_to_30)} ORDERS)*"]
             for idx, wo in enumerate(days_16_to_30, start=1):
                 lines.append(
                     f"   {idx}. *{wo['wo_number']}* • _{wo['skillset']}_ • *{wo['delay_code']}*"
@@ -213,7 +236,7 @@ def build_consolidated_messages(fee_name, work_orders):
             wo_sections.append("\n".join(lines))
 
         if days_0_to_15:
-            lines = ["🟢 *0 - 15 days*"]
+            lines = [f"🟢 *0 - 15 days ({len(days_0_to_15)} ORDERS)*"]
             for idx, wo in enumerate(days_0_to_15, start=1):
                 lines.append(
                     f"   {idx}. *{wo['wo_number']}* • _{wo['skillset']}_ • *{wo['delay_code']}*"
